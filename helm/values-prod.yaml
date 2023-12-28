@@ -1,0 +1,14 @@
+base-chart:
+
+  extraEnv:
+    # EXCLUDE_NAMESPACE: "kube-system"
+    # INCLUDE_LABELS
+
+  ingress:
+    enabled: true
+    className: internal
+    # annotations:
+    #   kubernetes.io/ingress.class: internal
+    paths: /
+    hosts:
+      - pod-relabel.prod-int.mypileus.io

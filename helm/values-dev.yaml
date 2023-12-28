@@ -1,0 +1,15 @@
+base-chart:
+
+  extraEnv:
+    # EXCLUDE_NAMESPACE: "kube-system"
+    # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
+    LOG_LEVEL: 1
+
+  ingress:
+    enabled: true
+    className: internal
+    # annotations:
+    #   kubernetes.io/ingress.class: internal
+    paths: /
+    hosts:
+      - pod-relabel.dev-int.mypileus.io

@@ -1,8 +1,12 @@
 GOARCH = amd64
 GOOS ?= linux
-BINARY = pod-relabel-app
+BINARY = pod-relabel
 VERSION= 0.0.2
-
+GOLINT_EXEC = golangci-lint
+AWS_ACCOUNT_ID := 932213950603
+AWS_REGION := us-east-1
+AWS_ECR := 932213950603.dkr.ecr.us-east-1.amazonaws.com
+ENVIRONMENT := dev
 
 BINARY_NAME_FULL_NAME = $(BINARY)_$(GOOS)_$(GOARCH)
 BUILD_FLAGS = GO111MODULE=on CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) GOFLAGS=-mod=vendor
@@ -22,11 +26,12 @@ build:
 docker: build
 	docker rmi -f anodot/$(BINARY):$(VERSION)
 	docker build -t anodot/$(BINARY):$(VERSION) .
-	docker push anodot/$(BINARY):$(VERSION)
+	docker tag anodot/$(BINARY):$(VERSION) $(AWS_ECR)/$(BINARY):$(VERSION)
+	docker push $(AWS_ECR)/$(BINARY):$(VERSION)
 
-k8s-deploy:
-	 kubectl delete -f ./dep.yaml || echo "NOT found"
-	 kubectl apply -f ./dep.yaml
+deploy:
+	helm upgrade pod-relabel ./helm --install --values=helm/values-$(ENVIRONMENT).yaml --set base-chart.image.tag=$(VERSION) -n pod-relabel --debug
+
 
 vendor-update:
 	GO111MODULE=on go mod tidy

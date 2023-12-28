@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
@@ -138,6 +139,7 @@ func (e excludeNSList) String() string {
 }
 
 func (c *config) Start() {
+	ctx := context.Background()
 	klog.V(2).Infof("starting pod re-label. labelsSelector='%s', namespaceIgnored='%s'", c.podLabelSelector, c.excludeNSList.String())
 	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", allNamespaces, fields.Everything())
 	cacheWatchList := &cache.ListWatch{
@@ -153,19 +155,30 @@ func (c *config) Start() {
 		for {
 			time.Sleep(5 * time.Minute)
 			//select only pods which does not have AnodotPodNameLabel
-			list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
+			// list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
+			list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
+
 			if err != nil {
 				klog.Error(err)
 			}
 
 			klog.V(4).Infof("found %d that does not have %q label", len(list.Items), AnodotPodNameLabel)
 
+			// for _, p := range list.Items {
+			// 	// err := c.doHandle(c.apiClient, &p)
+			// 	err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
+			// 	if err != nil {
+			// 		klog.Error(err)
+			// 	}
+			// }
+			
 			for _, p := range list.Items {
-				err := c.doHandle(c.apiClient, &p)
+				err := c.doHandle(ctx, c.apiClient, &p)
 				if err != nil {
 					klog.Error(err)
 				}
 			}
+
 
 			c.includedPods.PrintEntries()
 			c.excludePods.PrintEntries()
@@ -176,7 +189,7 @@ func (c *config) Start() {
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				klog.V(4).Infof("pod added' %s'", obj.(*corev1.Pod).Name)
-				err := c.doHandle(c.apiClient, obj.(*corev1.Pod))
+				err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
 				if err != nil {
 					klog.Error(err.Error())
 				}
@@ -193,7 +206,8 @@ func (c *config) Start() {
 	go controller.Run(stop)
 }
 
-func (c *config) doHandle(apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
+// func (c *config) doHandle(apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
+func (c *config) doHandle(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
 	klog.V(4).Infof("processing pod %q in namespace %q ", pod.Name, pod.Namespace)
 
 	if _, ignore := c.excludeNSList[pod.Namespace]; ignore {
@@ -236,7 +250,7 @@ func (c *config) doHandle(apiClient *kubernetes.Clientset, pod *corev1.Pod) erro
 		return nil
 	}
 
-	podOwner := getPodOwner(apiClient, pod)
+	podOwner := getPodOwner(ctx, apiClient, pod)
 	if podOwner == nil {
 		return nil
 	}
@@ -247,7 +261,9 @@ func (c *config) doHandle(apiClient *kubernetes.Clientset, pod *corev1.Pod) erro
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(metav1.ListOptions{LabelSelector: queryLabel})
+	// podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(metav1.ListOptions{LabelSelector: queryLabel})
+	// podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: queryLabel})
+	podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(ctx, metav1.ListOptions{LabelSelector: queryLabel})
 	if err != nil {
 		return err
 	}
@@ -307,7 +323,8 @@ FOR:
 	}
 
 	klog.V(5).Infof("PATCH-BYTES: %q", string(patchBytes))
-	updatedPod, err := apiClient.CoreV1().Pods(pod.Namespace).Patch(pod.Name, types.StrategicMergePatchType, patchBytes)
+	// updatedPod, err := apiClient.CoreV1().Pods(pod.Namespace).Patch(pod.Name, types.StrategicMergePatchType, patchBytes)
+	updatedPod, err := apiClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
 	if err != nil {
 		return err
 	}
@@ -323,7 +340,7 @@ FOR:
 	return nil
 }
 
-func getPodOwner(apiClient *kubernetes.Clientset, pod *corev1.Pod) *podOwner {
+func getPodOwner(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) *podOwner {
 	ownerReference := GetControllerOf(pod)
 	if ownerReference == nil {
 		klog.V(4).Infof("No owner reference for pod='%s'", pod.Name)
@@ -341,14 +358,14 @@ func getPodOwner(apiClient *kubernetes.Clientset, pod *corev1.Pod) *podOwner {
 	//Controlled by RS
 	if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("ReplicaSet").Kind {
 		klog.V(5).Infof("%q contolled by ReplicaSet", pod.Name)
-		deploymentForPod := getDeploymentForPod(apiClient, pod)
+		deploymentForPod := getDeploymentForPod(ctx, apiClient, pod)
 		if deploymentForPod != nil {
 			selector = deploymentForPod.Spec.Selector.MatchLabels
 			parentName = deploymentForPod.Name
 		}
 	} else if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
 		klog.V(5).Infof("%q contolled by DaemonSet", pod.Name)
-		daemonSet := getDaemonSet(apiClient, pod)
+		daemonSet := getDaemonSet(ctx, apiClient, pod)
 		if daemonSet != nil {
 			selector = daemonSet.Spec.Selector.MatchLabels
 			parentName = ownerReference.Name
@@ -373,14 +390,16 @@ type podOwner struct {
 	selector map[string]string
 }
 
-func getDaemonSet(apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.DaemonSet {
+func getDaemonSet(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.DaemonSet {
 	controllerRef := GetControllerOf(pod)
 	// We can't look up by UID, so look up by Name and then verify UID.
 	// Don't even try to look up by Name if it's the wrong Kind.
 	if controllerRef.Kind != v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
 		return nil
 	}
-	ds, err := apiClient.AppsV1().DaemonSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	// ds, err := apiClient.AppsV1().DaemonSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	ds, err := apiClient.AppsV1().DaemonSets(pod.Namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
+
 	if err != nil {
 		return nil
 	}
@@ -401,7 +420,7 @@ func GetControllerOf(controllee metav1.Object) *metav1.OwnerReference {
 	return nil
 }
 
-func getDeploymentForPod(apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.Deployment {
+func getDeploymentForPod(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.Deployment {
 	// Find the owning replica set
 	var rs *v1.ReplicaSet
 	var err error
@@ -415,7 +434,9 @@ func getDeploymentForPod(apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.D
 		return nil
 	}
 
-	rs, err = apiClient.AppsV1().ReplicaSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	// rs, err = apiClient.AppsV1().ReplicaSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	rs, err = apiClient.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
+
 	if err != nil || rs.UID != controllerRef.UID {
 		klog.V(5).Infof("cannot get replicaset %q for pod %q: %v", controllerRef.Name, pod.Name, err)
 		return nil
@@ -426,16 +447,18 @@ func getDeploymentForPod(apiClient *kubernetes.Clientset, pod *corev1.Pod) *v1.D
 	if controllerRef == nil {
 		return nil
 	}
-	return resolveControllerRef(apiClient, rs.Namespace, controllerRef)
+	return resolveControllerRef(ctx, apiClient, rs.Namespace, controllerRef)
 }
 
-func resolveControllerRef(apiClient *kubernetes.Clientset, namespace string, controllerRef *metav1.OwnerReference) *v1.Deployment {
+func resolveControllerRef(ctx context.Context, apiClient *kubernetes.Clientset, namespace string, controllerRef *metav1.OwnerReference) *v1.Deployment {
 	// We can't look up by UID, so look up by Name and then verify UID.
 	// Don't even try to look up by Name if it's the wrong Kind.
 	if controllerRef.Kind != v1.SchemeGroupVersion.WithKind("Deployment").Kind {
 		return nil
 	}
-	d, err := apiClient.AppsV1().Deployments(namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	// d, err := apiClient.AppsV1().Deployments(namespace).Get(controllerRef.Name, metav1.GetOptions{})
+	d, err := apiClient.AppsV1().Deployments(namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
+
 	if err != nil {
 		return nil
 	}
