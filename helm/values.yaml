@@ -2,7 +2,7 @@ base-chart:
   nameOverride: pod-relabel
   image:
     repository: 932213950603.dkr.ecr.us-east-1.amazonaws.com/pod-relabel
-    tag: 0.0.2
+    tag: 0.0.3
 
   replicaCount: 1
 

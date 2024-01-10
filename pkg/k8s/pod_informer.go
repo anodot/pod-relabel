@@ -155,7 +155,6 @@ func (c *config) Start() {
 		for {
 			time.Sleep(5 * time.Minute)
 			//select only pods which does not have AnodotPodNameLabel
-			// list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
 			list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
 
 			if err != nil {
@@ -206,7 +205,6 @@ func (c *config) Start() {
 	go controller.Run(stop)
 }
 
-// func (c *config) doHandle(apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
 func (c *config) doHandle(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
 	klog.V(4).Infof("processing pod %q in namespace %q ", pod.Name, pod.Namespace)
 
@@ -261,8 +259,6 @@ func (c *config) doHandle(ctx context.Context, apiClient *kubernetes.Clientset, 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(metav1.ListOptions{LabelSelector: queryLabel})
-	// podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: queryLabel})
 	podList, err := apiClient.CoreV1().Pods(pod.Namespace).List(ctx, metav1.ListOptions{LabelSelector: queryLabel})
 	if err != nil {
 		return err
@@ -323,7 +319,7 @@ FOR:
 	}
 
 	klog.V(5).Infof("PATCH-BYTES: %q", string(patchBytes))
-	// updatedPod, err := apiClient.CoreV1().Pods(pod.Namespace).Patch(pod.Name, types.StrategicMergePatchType, patchBytes)
+
 	updatedPod, err := apiClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
 	if err != nil {
 		return err
@@ -341,48 +337,42 @@ FOR:
 }
 
 func getPodOwner(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) *podOwner {
-	ownerReference := GetControllerOf(pod)
-	if ownerReference == nil {
-		klog.V(4).Infof("No owner reference for pod='%s'", pod.Name)
-		return &podOwner{
-			name:     pod.Name,
-			selector: pod.Labels,
-		}
-	}
+    ownerReference := GetControllerOf(pod)
+    if ownerReference == nil {
+        klog.V(4).Infof("No owner reference for pod='%s'", pod.Name)
+        return &podOwner{
+            name:     pod.Name,
+            selector: pod.Labels,
+        }
+    }
 
-	var selector map[string]string
-	var parentName = ""
+    klog.V(5).Infof("owner reference kind=%q with Name=%q", ownerReference.Kind, ownerReference.Name)
 
-	klog.V(5).Infof("owner reference kind=%q with Name=%q", ownerReference.Kind, ownerReference.Name)
+    if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("ReplicaSet").Kind {
+        klog.V(5).Infof("%q controlled by ReplicaSet", pod.Name)
+        deploymentForPod := getDeploymentForPod(ctx, apiClient, pod)
+        if deploymentForPod != nil {
+            return &podOwner{
+                name:     deploymentForPod.Name,
+                selector: deploymentForPod.Spec.Selector.MatchLabels,
+            }
+        }
+    } else if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
+        klog.V(5).Infof("%q controlled by DaemonSet", pod.Name)
+        daemonSet := getDaemonSet(ctx, apiClient, pod)
+        if daemonSet != nil {
+            return &podOwner{
+                name:     daemonSet.Name,
+                selector: daemonSet.Spec.Selector.MatchLabels,
+            }
+        }
+    } else if ownerReference.Kind == "Job" {
+        // Handling for Job type if required
+    } else {
+        klog.V(4).Infof("Unsupported owner reference %q with Name %q", ownerReference.Kind, ownerReference.Name)
+    }
 
-	//Controlled by RS
-	if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("ReplicaSet").Kind {
-		klog.V(5).Infof("%q contolled by ReplicaSet", pod.Name)
-		deploymentForPod := getDeploymentForPod(ctx, apiClient, pod)
-		if deploymentForPod != nil {
-			selector = deploymentForPod.Spec.Selector.MatchLabels
-			parentName = deploymentForPod.Name
-		}
-	} else if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
-		klog.V(5).Infof("%q contolled by DaemonSet", pod.Name)
-		daemonSet := getDaemonSet(ctx, apiClient, pod)
-		if daemonSet != nil {
-			selector = daemonSet.Spec.Selector.MatchLabels
-			parentName = ownerReference.Name
-		}
-	} else if ownerReference.Kind == "Job" {
-		klog.V(5).Infof("%q contolled by Job", pod.Name)
-		selector = pod.Labels
-		parentName = ownerReference.Name
-	} else {
-		klog.V(4).Infof("Unsupported owner reference %q with Name %q", ownerReference.Kind, ownerReference.Name)
-		return nil
-	}
-
-	return &podOwner{
-		name:     parentName,
-		selector: selector,
-	}
+    return nil
 }
 
 type podOwner struct {
@@ -397,7 +387,7 @@ func getDaemonSet(ctx context.Context, apiClient *kubernetes.Clientset, pod *cor
 	if controllerRef.Kind != v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
 		return nil
 	}
-	// ds, err := apiClient.AppsV1().DaemonSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
+
 	ds, err := apiClient.AppsV1().DaemonSets(pod.Namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
 
 	if err != nil {
@@ -434,7 +424,6 @@ func getDeploymentForPod(ctx context.Context, apiClient *kubernetes.Clientset, p
 		return nil
 	}
 
-	// rs, err = apiClient.AppsV1().ReplicaSets(pod.Namespace).Get(controllerRef.Name, metav1.GetOptions{})
 	rs, err = apiClient.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
 
 	if err != nil || rs.UID != controllerRef.UID {
@@ -456,7 +445,7 @@ func resolveControllerRef(ctx context.Context, apiClient *kubernetes.Clientset, 
 	if controllerRef.Kind != v1.SchemeGroupVersion.WithKind("Deployment").Kind {
 		return nil
 	}
-	// d, err := apiClient.AppsV1().Deployments(namespace).Get(controllerRef.Name, metav1.GetOptions{})
+
 	d, err := apiClient.AppsV1().Deployments(namespace).Get(ctx, controllerRef.Name, metav1.GetOptions{})
 
 	if err != nil {

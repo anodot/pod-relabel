@@ -1,11 +1,11 @@
 GOARCH = amd64
 GOOS ?= linux
 BINARY = pod-relabel
-VERSION= 0.0.2
+VERSION= 0.0.3
 GOLINT_EXEC = golangci-lint
 AWS_ACCOUNT_ID := 932213950603
 AWS_REGION := us-east-1
-AWS_ECR := 932213950603.dkr.ecr.us-east-1.amazonaws.com
+AWS_ECR := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 ENVIRONMENT := dev
 
 BINARY_NAME_FULL_NAME = $(BINARY)_$(GOOS)_$(GOARCH)
