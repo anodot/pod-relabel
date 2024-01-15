@@ -13,3 +13,21 @@ base-chart:
     paths: /
     hosts:
       - pod-relabel.dev-int.mypileus.io
+
+  clusterRole:
+    enabled: true
+    name: pod-relabel-role
+    rules:
+      - apiGroups: [""]
+        resources: ["pods", "replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+
+  clusterRoleBinding:
+    enabled: true
+    name: pod-relabel-role-binding
+    roleName: pod-list-role
+    serviceAccountName: pod-relabel-serviceaccount
+    namespace: pod-relabel

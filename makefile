@@ -13,8 +13,12 @@ BUILD_FLAGS = GO111MODULE=on CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) GOFLAGS
 GO_BUILD = $(BUILD_FLAGS) go build $(GO_LD_FLAGS) -o $(BINARY_NAME_FULL_NAME) $(VERBOSE_FLAG) $(GOTARGET)
 
 all: lint build
-redeploy: build docker k8s-deploy
+redeploy: build docker deploy
 
+login: ## aws ecr helm login
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	aws ecr get-login-password --region $(AWS_REGION) | helm registry login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	
 lint:
 	@echo Running linters...
 	$(BUILD_FLAGS) $(GOLINT_EXEC) run
@@ -23,13 +27,13 @@ build:
 	rm -rf $(BINARY_NAME_FULL_NAME)
 	$(GO_BUILD)
 
-docker: build
+docker: login build
 	docker rmi -f anodot/$(BINARY):$(VERSION)
 	docker build -t anodot/$(BINARY):$(VERSION) .
 	docker tag anodot/$(BINARY):$(VERSION) $(AWS_ECR)/$(BINARY):$(VERSION)
 	docker push $(AWS_ECR)/$(BINARY):$(VERSION)
 
-deploy:
+deploy: login
 	helm upgrade pod-relabel ./helm --install --values=helm/values-$(ENVIRONMENT).yaml --set base-chart.image.tag=$(VERSION) -n pod-relabel --debug
 
 
