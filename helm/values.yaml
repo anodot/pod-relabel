@@ -21,6 +21,8 @@ base-chart:
       memory: 1800M
 
   service:
+    managementPort: 8000
+    managementPortName: http-management
     serverPort: 8080
     serverPortName: http
     targetPort: http
@@ -38,3 +40,21 @@ base-chart:
     paths: /
     # hosts:
     #   - app-name.dev-int.mypileus.io
+
+  clusterRole:
+    enabled: true
+    name: pod-relabel-role
+    rules:
+      - apiGroups: [""]
+        resources: ["pods", "replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+
+  clusterRoleBinding:
+    enabled: true
+    name: pod-relabel-role-binding
+    roleName: pod-relabel-role
+    serviceAccountName: pod-relabel-serviceaccount
+    namespace: pod-relabel
