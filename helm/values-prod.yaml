@@ -1,0 +1,6 @@
+base-chart:
+
+  extraEnv:
+    EXCLUDE_NAMESPACE: "kube-system,logs"
+    # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
+    LOG_LEVEL: 1
