@@ -4,5 +4,5 @@ base-chart:
     INCLUDE_NAMESPACE: "dev"
     # EXCLUDE_NAMESPACE: "kube-system"
     # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
-    LOG_LEVEL: 2
+    LOG_LEVEL: 1
 
