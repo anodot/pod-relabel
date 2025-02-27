@@ -2,7 +2,7 @@ base-chart:
   nameOverride: pod-relabel
   image:
     repository: 932213950603.dkr.ecr.us-east-1.amazonaws.com/pod-relabel
-    tag: 0.0.3
+    tag: 2024-06-07-12-56-6fc06ce
 
   replicaCount: 1
 
@@ -14,8 +14,8 @@ base-chart:
 
   resources:
     limits:
-      #cpu: 2000m
-      # memory: 4000M
+      cpu: 500m
+      memory: 600M
     requests:
       cpu: 50m
       memory: 300M
@@ -57,4 +57,4 @@ base-chart:
     name: pod-relabel-role-binding
     roleName: pod-relabel-role
     serviceAccountName: pod-relabel-serviceaccount
-    namespace: pod-relabel
+    namespace: dev

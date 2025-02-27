@@ -4,6 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	v1 "k8s.io/api/apps/v1"
@@ -18,22 +27,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
-	"math"
-	"net/http"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 var (
+	// TODO: check
 	cacheMissed = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "anodot_kubernetes_pod_cache_missed",
 		Help: "Number of time cache missed",
 	})
-
+	// TODO: check
 	cacheFillTime = promauto.NewSummary(prometheus.SummaryOpts{
 		Name:       "anodot_kubernetes_cache_fill_time_ms",
 		Help:       "CAHNGE-me",
@@ -44,21 +46,99 @@ var (
 const (
 	allNamespaces         = ""
 	excludeNamespaceParam = "EXCLUDE_NAMESPACE"
+	includeNamespaceParam = "INCLUDE_NAMESPACE"
 
 	AnodotPodNameLabel string = "anodot.com/podName"
 )
 
 var StatefulPodRegex = regexp.MustCompile("(.*)-([0-9]+)$")
 
-type excludeNSList map[string]bool
+type NamespaceFilter interface {
+	IsAllowed(namespace string) bool
+	String() string
+}
 
-func NewExcludeNS(v string) excludeNSList {
-	m := make(map[string]bool)
-	for _, v := range strings.Split(v, ",") {
-		m[v] = true
+type IncludeNamespaceFilter struct {
+	namespaces map[string]bool
+}
+
+type ExcludeNamespaceFilter struct {
+	namespaces map[string]bool
+}
+
+func NewIncludeNamespaceFilter(namespaceList string) *IncludeNamespaceFilter {
+	filter := &IncludeNamespaceFilter{
+		namespaces: make(map[string]bool),
 	}
 
-	return m
+	for _, ns := range strings.Split(namespaceList, ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			filter.namespaces[ns] = true
+		}
+	}
+
+	return filter
+}
+
+func (f *IncludeNamespaceFilter) IsAllowed(namespace string) bool {
+	if len(f.namespaces) == 0 {
+		return false
+	}
+
+	return f.namespaces[namespace]
+}
+
+func (f *IncludeNamespaceFilter) String() string {
+	names := make([]string, 0, len(f.namespaces))
+	for name := range f.namespaces {
+		names = append(names, name)
+	}
+	return fmt.Sprintf("Include:[%s]", strings.Join(names, ","))
+}
+
+func NewExcludeNamespaceFilter(namespaceList string) *ExcludeNamespaceFilter {
+	filter := &ExcludeNamespaceFilter{
+		namespaces: make(map[string]bool),
+	}
+
+	for _, ns := range strings.Split(namespaceList, ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			filter.namespaces[ns] = true
+		}
+	}
+
+	return filter
+}
+
+func (f *ExcludeNamespaceFilter) IsAllowed(namespace string) bool {
+	if len(f.namespaces) == 0 {
+		return true
+	}
+
+	// Any namespace not in map is allowed
+	return !f.namespaces[namespace]
+}
+
+func (f *ExcludeNamespaceFilter) String() string {
+	names := make([]string, 0, len(f.namespaces))
+	for name := range f.namespaces {
+		names = append(names, name)
+	}
+	return fmt.Sprintf("Exclude:[%s]", strings.Join(names, ","))
+}
+
+// Factory func to create ns filter
+func CreateNamespaceFilter(includeNamespaces, excludeNamespaces string) (NamespaceFilter, error) {
+	if includeNamespaces != "" && excludeNamespaces != "" {
+		return nil, fmt.Errorf("only one of %s or %s can be specified, not both", includeNamespaceParam, excludeNamespaceParam)
+	}
+
+	if includeNamespaces != "" {
+		return NewIncludeNamespaceFilter(includeNamespaces), nil
+	}
+
+	// Default to exclude
+	return NewExcludeNamespaceFilter(excludeNamespaces), nil
 }
 
 type PodsMapping struct {
@@ -68,7 +148,7 @@ type PodsMapping struct {
 
 type config struct {
 	podLabelSelector labels.Selector
-	excludeNSList    excludeNSList
+	namespaceFilter  NamespaceFilter
 
 	includedPods *PodCache
 	excludePods  *PodCache
@@ -89,13 +169,102 @@ func (c *config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer r.Body.Close()
 
-	w.Header().Set("Content-Type", "application/json")
-	mapping := PodsMapping{
-		WhitelistedPods: c.includedPods,
-		ExcludedPods:    c.excludePods,
+	// parse
+	namespace := r.URL.Query().Get("namespace")
+	podID := r.URL.Query().Get("pod_id")
+
+	// if pod_id is specified return as plain text
+	if podID != "" {
+		// We need an explicit namespace parameter for all pod lookups
+		if namespace == "" {
+			klog.V(4).Infof("pod lookup failed: missing namespace parameter for pod %s", podID)
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusNotFound)
+			_, err := w.Write([]byte(""))
+			if err != nil {
+				klog.Errorf("Error writing response: %v", err)
+			}
+			return
+		}
+
+		// Check in whitelisted pods
+		podName := c.includedPods.Lookup(SearchEntry{
+			PodName:   podID,
+			Namespace: namespace,
+		})
+
+		if podName != "" {
+			w.Header().Set("Content-Type", "text/plain")
+			_, err := w.Write([]byte(podName))
+			if err != nil {
+				klog.Errorf("Error writing response: %v", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		// Pod not found
+		klog.V(4).Infof("pod not found: %s in namespace %s", podID, namespace)
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotFound)
+		_, err := w.Write([]byte(""))
+		if err != nil {
+			klog.Errorf("Error writing response: %v", err)
+		}
+		return
 	}
 
-	bytes, err := json.Marshal(mapping)
+	// Default case: return full JSON response
+	w.Header().Set("Content-Type", "application/json")
+
+	// If no filters specified, return full map
+	if namespace == "" {
+		mapping := PodsMapping{
+			WhitelistedPods: c.includedPods,
+			ExcludedPods:    c.excludePods,
+		}
+
+		bytes, err := json.Marshal(mapping)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		klog.V(5).Info(string(bytes))
+		_, err = w.Write(bytes)
+		if err != nil {
+			klog.Errorf("Error writing response: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Filter by namespace only
+	result := make(map[string]interface{})
+	whitelistedPods := make(map[string]string)
+	excludedPods := make(map[string]string)
+
+	// Filter whitelisted pods
+	for k, v := range c.includedPods.Data {
+		ns, _ := k.GetPodNameAndNamespace()
+		if ns == namespace {
+			whitelistedPods[string(k)] = v
+		}
+	}
+
+	// Filter excluded pods
+	for k, v := range c.excludePods.Data {
+		ns, _ := k.GetPodNameAndNamespace()
+		if ns == namespace {
+			excludedPods[string(k)] = v
+		}
+	}
+
+	result["namespace"] = namespace
+	result["whitelistedPods"] = whitelistedPods
+	result["excludedPods"] = excludedPods
+
+	bytes, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -104,43 +273,37 @@ func (c *config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	klog.V(5).Info(string(bytes))
 	_, err = w.Write(bytes)
 	if err != nil {
+		klog.Errorf("Error writing response: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
-
 }
 
-func NewPodRelabel(apiClinet *kubernetes.Clientset, excludeNamespaces string, includeLabels string, notify chan bool) (*config, error) {
-
+func NewPodRelabel(apiClient *kubernetes.Clientset, excludeNamespaces, includeNamespaces, includeLabels string, notify chan bool) (*config, error) {
 	selector, err := labels.Parse(includeLabels)
+	if err != nil {
+		return nil, fmt.Errorf("invalid label selector: %w", err)
+	}
+
+	// Create namespace filter
+	nsFilter, err := CreateNamespaceFilter(includeNamespaces, excludeNamespaces)
 	if err != nil {
 		return nil, err
 	}
 
 	return &config{
 		podLabelSelector: selector,
-		excludeNSList:    NewExcludeNS(excludeNamespaces),
+		namespaceFilter:  nsFilter,
 		includedPods:     NewCache(),
 		excludePods:      NewCache(),
 		mu:               sync.Mutex{},
-		apiClient:        apiClinet,
+		apiClient:        apiClient,
 		notify:           notify,
 	}, nil
-
-}
-
-func (e excludeNSList) String() string {
-	res := make([]string, len(e))
-	for k := range e {
-		res = append(res, k)
-	}
-
-	return strings.Join(res, ",")
 }
 
 func (c *config) Start() {
 	ctx := context.Background()
-	klog.V(2).Infof("starting pod re-label. labelsSelector='%s', namespaceIgnored='%s'", c.podLabelSelector, c.excludeNSList.String())
+	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s'", c.podLabelSelector, c.namespaceFilter.String())
 	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", allNamespaces, fields.Everything())
 	cacheWatchList := &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
@@ -170,14 +333,13 @@ func (c *config) Start() {
 			// 		klog.Error(err)
 			// 	}
 			// }
-			
+
 			for _, p := range list.Items {
 				err := c.doHandle(ctx, c.apiClient, &p)
 				if err != nil {
 					klog.Error(err)
 				}
 			}
-
 
 			c.includedPods.PrintEntries()
 			c.excludePods.PrintEntries()
@@ -208,8 +370,9 @@ func (c *config) Start() {
 func (c *config) doHandle(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
 	klog.V(4).Infof("processing pod %q in namespace %q ", pod.Name, pod.Namespace)
 
-	if _, ignore := c.excludeNSList[pod.Namespace]; ignore {
-		klog.V(4).Infof("pod %s is in exclude namespace list", pod.Name)
+	// Check if the pod namespace is allowed by filter
+	if !c.namespaceFilter.IsAllowed(pod.Namespace) {
+		klog.V(4).Infof("pod %s is in filtered namespace %s", pod.Name, pod.Namespace)
 		c.excludePods.Store(SaveEntry{
 			Name:        pod.Name,
 			ChangedName: pod.Name,
@@ -337,42 +500,42 @@ FOR:
 }
 
 func getPodOwner(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) *podOwner {
-    ownerReference := GetControllerOf(pod)
-    if ownerReference == nil {
-        klog.V(4).Infof("No owner reference for pod='%s'", pod.Name)
-        return &podOwner{
-            name:     pod.Name,
-            selector: pod.Labels,
-        }
-    }
+	ownerReference := GetControllerOf(pod)
+	if ownerReference == nil {
+		klog.V(4).Infof("No owner reference for pod='%s'", pod.Name)
+		return &podOwner{
+			name:     pod.Name,
+			selector: pod.Labels,
+		}
+	}
 
-    klog.V(5).Infof("owner reference kind=%q with Name=%q", ownerReference.Kind, ownerReference.Name)
+	klog.V(5).Infof("owner reference kind=%q with Name=%q", ownerReference.Kind, ownerReference.Name)
 
-    if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("ReplicaSet").Kind {
-        klog.V(5).Infof("%q controlled by ReplicaSet", pod.Name)
-        deploymentForPod := getDeploymentForPod(ctx, apiClient, pod)
-        if deploymentForPod != nil {
-            return &podOwner{
-                name:     deploymentForPod.Name,
-                selector: deploymentForPod.Spec.Selector.MatchLabels,
-            }
-        }
-    } else if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
-        klog.V(5).Infof("%q controlled by DaemonSet", pod.Name)
-        daemonSet := getDaemonSet(ctx, apiClient, pod)
-        if daemonSet != nil {
-            return &podOwner{
-                name:     daemonSet.Name,
-                selector: daemonSet.Spec.Selector.MatchLabels,
-            }
-        }
-    } else if ownerReference.Kind == "Job" {
-        // Handling for Job type if required
-    } else {
-        klog.V(4).Infof("Unsupported owner reference %q with Name %q", ownerReference.Kind, ownerReference.Name)
-    }
+	if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("ReplicaSet").Kind {
+		klog.V(5).Infof("%q controlled by ReplicaSet", pod.Name)
+		deploymentForPod := getDeploymentForPod(ctx, apiClient, pod)
+		if deploymentForPod != nil {
+			return &podOwner{
+				name:     deploymentForPod.Name,
+				selector: deploymentForPod.Spec.Selector.MatchLabels,
+			}
+		}
+	} else if ownerReference.Kind == v1.SchemeGroupVersion.WithKind("DaemonSet").Kind {
+		klog.V(5).Infof("%q controlled by DaemonSet", pod.Name)
+		daemonSet := getDaemonSet(ctx, apiClient, pod)
+		if daemonSet != nil {
+			return &podOwner{
+				name:     daemonSet.Name,
+				selector: daemonSet.Spec.Selector.MatchLabels,
+			}
+		}
+	} else if ownerReference.Kind == "Job" {
+		// Handling for Job type if required
+	} else {
+		klog.V(4).Infof("Unsupported owner reference %q with Name %q", ownerReference.Kind, ownerReference.Name)
+	}
 
-    return nil
+	return nil
 }
 
 type podOwner struct {

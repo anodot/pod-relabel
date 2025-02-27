@@ -2,13 +2,14 @@ package main
 
 import (
 	"flag"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/klog"
 	"log"
 	"net/http"
 	"os"
 	"pod-labes-setter/pkg/k8s"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/klog"
 )
 
 func main() {
@@ -16,10 +17,10 @@ func main() {
 	flag.Set("v", os.Getenv("LOG_LEVEL"))
 	flag.Parse()
 
-	exludeNsStr := os.Getenv("EXCLUDE_NAMESPACE")
+	excludeNsStr := os.Getenv("EXCLUDE_NAMESPACE")
+	includeNsStr := os.Getenv("INCLUDE_NAMESPACE")
 	labelsSelectorStr := os.Getenv("INCLUDE_LABELS")
 
-	//refreshConfig := make(chan bool, 1)
 	notify := make(chan bool)
 
 	clusterConfig, err := rest.InClusterConfig()
@@ -32,7 +33,7 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	podWatcher, err := k8s.NewPodRelabel(client, exludeNsStr, labelsSelectorStr, notify)
+	podWatcher, err := k8s.NewPodRelabel(client, excludeNsStr, includeNsStr, labelsSelectorStr, notify)
 	if err != nil {
 		klog.Fatalf("Failed to initialize k8s pod watcher. Error: %s", err.Error())
 	}

@@ -1,7 +1,8 @@
 GOARCH = amd64
 GOOS ?= linux
 BINARY = pod-relabel
-VERSION= 0.0.3
+# VERSION= 0.0.5
+VERSION ?= $(shell git show -s --format=%cd-%h --date=format:'%Y-%m-%d-%H-%M')
 GOLINT_EXEC = golangci-lint
 AWS_ACCOUNT_ID := 932213950603
 AWS_REGION := us-east-1
@@ -34,7 +35,7 @@ docker: login build
 	docker push $(AWS_ECR)/$(BINARY):$(VERSION)
 
 deploy: login
-	helm upgrade pod-relabel ./helm --install --values=helm/values-$(ENVIRONMENT).yaml --set base-chart.image.tag=$(VERSION) -n pod-relabel --debug
+	helm upgrade pod-relabel ./helm --install --values=helm/values-$(ENVIRONMENT).yaml --set base-chart.image.tag=$(VERSION) -n $(ENVIRONMENT) --debug
 
 
 vendor-update:
