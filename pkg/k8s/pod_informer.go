@@ -304,7 +304,17 @@ func NewPodRelabel(apiClient *kubernetes.Clientset, excludeNamespaces, includeNa
 func (c *config) Start() {
 	ctx := context.Background()
 	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s'", c.podLabelSelector, c.namespaceFilter.String())
-	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", allNamespaces, fields.Everything())
+
+	// use first from INCLUDE_NAMESPACE if not empty, else allNamespaces
+	watchNamespace := allNamespaces
+	if includeFilter, ok := c.namespaceFilter.(*IncludeNamespaceFilter); ok && len(includeFilter.namespaces) > 0 {
+		for ns := range includeFilter.namespaces {
+			watchNamespace = ns
+			break
+		}
+	}
+
+	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", watchNamespace, fields.Everything())
 	cacheWatchList := &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return watchlist.List(options)
