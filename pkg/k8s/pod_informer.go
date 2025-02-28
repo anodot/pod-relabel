@@ -149,6 +149,8 @@ type PodsMapping struct {
 type config struct {
 	podLabelSelector labels.Selector
 	namespaceFilter  NamespaceFilter
+	watchNamespace   string
+	stopCh           chan struct{}
 
 	includedPods *PodCache
 	excludePods  *PodCache
@@ -301,51 +303,94 @@ func NewPodRelabel(apiClient *kubernetes.Clientset, excludeNamespaces, includeNa
 
 func (c *config) Start() {
 	ctx := context.Background()
-	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s'", c.podLabelSelector, c.namespaceFilter.String())
 
 	// watch first from INCLUDE_NAMESPACE if not empty, else allNamespaces
 	watchNamespace := allNamespaces
 	if includeFilter, ok := c.namespaceFilter.(*IncludeNamespaceFilter); ok {
 		if len(includeFilter.namespaces) > 0 {
 			for ns := range includeFilter.namespaces {
-				if includeFilter.namespaces[ns] {
-					watchNamespace = ns
-					klog.V(2).Infof("watching namespace '%s' based on INCLUDE_NAMESPACE", watchNamespace)
-					break
-				}
+				watchNamespace = ns
+				klog.V(2).Infof("watching namespace '%s' based on INCLUDE_NAMESPACE", watchNamespace)
+				break
 			}
 		}
 	}
 
-	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", watchNamespace, fields.Everything())
+	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s', watching namespace='%s'",
+		c.podLabelSelector, c.namespaceFilter.String(), watchNamespace)
+	c.watchNamespace = watchNamespace
+	c.startInformer(ctx)
+	c.startPeriodicJob(ctx)
+}
+
+func (c *config) startInformer(ctx context.Context) {
+	watchlist := cache.NewListWatchFromClient(
+		c.apiClient.CoreV1().RESTClient(),
+		"pods",
+		c.watchNamespace,
+		fields.Everything(),
+	)
+
 	cacheWatchList := &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+			klog.V(4).Infof("listing pods in namespace '%s'", c.watchNamespace)
 			return watchlist.List(options)
 		},
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+			klog.V(4).Infof("watching pods in namespace '%s'", c.watchNamespace)
 			return watchlist.Watch(options)
 		},
 	}
 
+	_, controller := cache.NewInformer(cacheWatchList, &corev1.Pod{}, 0,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				pod := obj.(*corev1.Pod)
+				klog.V(2).Infof("pod added: '%s' in namespace '%s'", pod.Name, pod.Namespace)
+				err := c.doHandle(ctx, c.apiClient, pod)
+				if err != nil {
+					klog.Error(err.Error())
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				pod := obj.(*corev1.Pod)
+				klog.V(2).Infof("pod deleted: '%s' in namespace '%s'", pod.Name, pod.Namespace)
+				c.includedPods.Delete(SearchEntry{Namespace: pod.Namespace, PodName: pod.Name})
+			},
+		},
+	)
+
+	stop := make(chan struct{})
+	c.stopCh = stop
+	go controller.Run(stop)
+}
+
+func (c *config) startPeriodicJob(ctx context.Context) {
 	go func() {
 		for {
 			time.Sleep(5 * time.Minute)
+
+			klog.V(2).Infof("running periodic check for unlabeled pods in namespace '%s'", c.watchNamespace)
+
 			//select only pods which does not have AnodotPodNameLabel
-			list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
+			list, err := c.apiClient.CoreV1().Pods(c.watchNamespace).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel),
+			})
 
 			if err != nil {
-				klog.Error(err)
+				klog.Errorf("error listing pods: %v", err)
+				continue
 			}
 
-			klog.V(4).Infof("found %d that does not have %q label", len(list.Items), AnodotPodNameLabel)
-
 			// for _, p := range list.Items {
-			// 	// err := c.doHandle(c.apiClient, &p)
-			// 	err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
-			// 	if err != nil {
-			// 		klog.Error(err)
-			// 	}
+			//      // err := c.doHandle(c.apiClient, &p)
+			//      err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
+			//      if err != nil {
+			//              klog.Error(err)
+			//      }
 			// }
+			klog.V(2).Infof("found %d pods that do not have %q label in namespace '%s'",
+				len(list.Items), AnodotPodNameLabel, c.watchNamespace)
 
 			for _, p := range list.Items {
 				err := c.doHandle(ctx, c.apiClient, &p)
@@ -358,27 +403,88 @@ func (c *config) Start() {
 			c.excludePods.PrintEntries()
 		}
 	}()
-
-	_, controller := cache.NewInformer(cacheWatchList, &corev1.Pod{}, 0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				klog.V(4).Infof("pod added' %s'", obj.(*corev1.Pod).Name)
-				err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
-				if err != nil {
-					klog.Error(err.Error())
-				}
-			},
-			DeleteFunc: func(obj interface{}) {
-				pod := obj.(*corev1.Pod)
-				klog.V(4).Infof("pod deleted' %s'", pod.Name)
-				c.includedPods.Delete(SearchEntry{Namespace: pod.Namespace, PodName: pod.Name})
-			},
-		},
-	)
-
-	stop := make(chan struct{})
-	go controller.Run(stop)
 }
+
+// func (c *config) Start() {
+// 	ctx := context.Background()
+// 	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s'", c.podLabelSelector, c.namespaceFilter.String())
+
+// 	// watch first from INCLUDE_NAMESPACE if not empty, else allNamespaces
+// 	watchNamespace := allNamespaces
+// 	if includeFilter, ok := c.namespaceFilter.(*IncludeNamespaceFilter); ok {
+// 		if len(includeFilter.namespaces) > 0 {
+// 			for ns := range includeFilter.namespaces {
+// 				if includeFilter.namespaces[ns] {
+// 					watchNamespace = ns
+// 					klog.V(2).Infof("watching namespace '%s' based on INCLUDE_NAMESPACE", watchNamespace)
+// 					break
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	watchlist := cache.NewListWatchFromClient(c.apiClient.CoreV1().RESTClient(), "pods", watchNamespace, fields.Everything())
+// 	cacheWatchList := &cache.ListWatch{
+// 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+// 			return watchlist.List(options)
+// 		},
+// 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+// 			return watchlist.Watch(options)
+// 		},
+// 	}
+
+// 	go func() {
+// 		for {
+// 			time.Sleep(5 * time.Minute)
+// 			//select only pods which does not have AnodotPodNameLabel
+// 			list, err := c.apiClient.CoreV1().Pods(allNamespaces).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("!%s", AnodotPodNameLabel)})
+
+// 			if err != nil {
+// 				klog.Error(err)
+// 			}
+
+// 			klog.V(4).Infof("found %d that does not have %q label", len(list.Items), AnodotPodNameLabel)
+
+// 			// for _, p := range list.Items {
+// 			// 	// err := c.doHandle(c.apiClient, &p)
+// 			// 	err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
+// 			// 	if err != nil {
+// 			// 		klog.Error(err)
+// 			// 	}
+// 			// }
+
+// 			for _, p := range list.Items {
+// 				err := c.doHandle(ctx, c.apiClient, &p)
+// 				if err != nil {
+// 					klog.Error(err)
+// 				}
+// 			}
+
+// 			c.includedPods.PrintEntries()
+// 			c.excludePods.PrintEntries()
+// 		}
+// 	}()
+
+// 	_, controller := cache.NewInformer(cacheWatchList, &corev1.Pod{}, 0,
+// 		cache.ResourceEventHandlerFuncs{
+// 			AddFunc: func(obj interface{}) {
+// 				klog.V(4).Infof("pod added' %s'", obj.(*corev1.Pod).Name)
+// 				err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
+// 				if err != nil {
+// 					klog.Error(err.Error())
+// 				}
+// 			},
+// 			DeleteFunc: func(obj interface{}) {
+// 				pod := obj.(*corev1.Pod)
+// 				klog.V(4).Infof("pod deleted' %s'", pod.Name)
+// 				c.includedPods.Delete(SearchEntry{Namespace: pod.Namespace, PodName: pod.Name})
+// 			},
+// 		},
+// 	)
+
+// 	stop := make(chan struct{})
+// 	go controller.Run(stop)
+// }
 
 func (c *config) doHandle(ctx context.Context, apiClient *kubernetes.Clientset, pod *corev1.Pod) error {
 	klog.V(4).Infof("processing pod %q in namespace %q ", pod.Name, pod.Namespace)
