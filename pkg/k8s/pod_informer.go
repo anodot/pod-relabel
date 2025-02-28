@@ -178,12 +178,8 @@ func (c *config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// We need an explicit namespace parameter for all pod lookups
 		if namespace == "" {
 			klog.V(4).Infof("pod lookup failed: missing namespace parameter for pod %s", podID)
-			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
-			_, err := w.Write([]byte(""))
-			if err != nil {
-				klog.Errorf("Error writing response: %v", err)
-			}
 			return
 		}
 
@@ -194,8 +190,14 @@ func (c *config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if podName != "" {
-			w.Header().Set("Content-Type", "text/plain")
-			_, err := w.Write([]byte(podName))
+			w.Header().Set("Content-Type", "application/json")
+			jsonBytes, err := json.Marshal(podName)
+			if err != nil {
+				klog.Errorf("Error marshaling JSON: %v", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, err = w.Write(jsonBytes)
 			if err != nil {
 				klog.Errorf("Error writing response: %v", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -205,12 +207,8 @@ func (c *config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Pod not found
 		klog.V(4).Infof("pod not found: %s in namespace %s", podID, namespace)
-		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		_, err := w.Write([]byte(""))
-		if err != nil {
-			klog.Errorf("Error writing response: %v", err)
-		}
 		return
 	}
 
@@ -305,12 +303,17 @@ func (c *config) Start() {
 	ctx := context.Background()
 	klog.V(2).Infof("starting pod relabel, labelsSelector='%s', namespaceFilter='%s'", c.podLabelSelector, c.namespaceFilter.String())
 
-	// use first from INCLUDE_NAMESPACE if not empty, else allNamespaces
+	// watch first from INCLUDE_NAMESPACE if not empty, else allNamespaces
 	watchNamespace := allNamespaces
-	if includeFilter, ok := c.namespaceFilter.(*IncludeNamespaceFilter); ok && len(includeFilter.namespaces) > 0 {
-		for ns := range includeFilter.namespaces {
-			watchNamespace = ns
-			break
+	if includeFilter, ok := c.namespaceFilter.(*IncludeNamespaceFilter); ok {
+		if len(includeFilter.namespaces) > 0 {
+			for ns := range includeFilter.namespaces {
+				if includeFilter.namespaces[ns] {
+					watchNamespace = ns
+					klog.V(2).Infof("watching namespace '%s' based on INCLUDE_NAMESPACE", watchNamespace)
+					break
+				}
+			}
 		}
 	}
 
