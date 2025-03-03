@@ -39,7 +39,7 @@ base-chart:
     #   kubernetes.io/ingress.class: internal
     paths: /
     # hosts:
-    #   - app-name.dev-int.mypileus.io
+    #   - app-name.example.io
 
   clusterRole:
     enabled: true
