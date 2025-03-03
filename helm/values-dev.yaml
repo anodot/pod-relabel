@@ -1,0 +1,21 @@
+base-chart:
+
+  extraEnv:
+    INCLUDE_NAMESPACE: "dev" # single namespace 
+    # EXCLUDE_NAMESPACE: "kube-system"
+    # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
+    LOG_LEVEL: 4
+
+  servicemonitor:
+    enabled: true
+    prometheus:
+      namespace: monitoring
+      labels:
+        release: kube-prometheus-stack
+        app: kube-prometheus-stack
+    selector:
+      matchLabels:
+        app: pod-relabel
+    port: http
+    path: metrics
+    interval: 45s

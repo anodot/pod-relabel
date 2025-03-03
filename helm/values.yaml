@@ -1,0 +1,60 @@
+base-chart:
+  nameOverride: pod-relabel
+  image:
+    repository: 932213950603.dkr.ecr.us-east-1.amazonaws.com/pod-relabel
+    tag: 2024-06-07-12-56-6fc06ce
+
+  replicaCount: 1
+
+  javaConfig:
+    enabled: false
+
+  extraEnv:
+
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 600M
+    requests:
+      cpu: 50m
+      memory: 300M
+
+  service:
+    managementPort: 8000
+    managementPortName: http-management
+    serverPort: 8080
+    serverPortName: http
+    targetPort: http
+    labels:
+      version: v1
+    # annotations:
+    #   key: value
+    type: ClusterIP
+
+  ingress:
+    enabled: false
+    className: internal
+    # annotations:
+    #   kubernetes.io/ingress.class: internal
+    paths: /
+    # hosts:
+    #   - app-name.example.io
+
+  clusterRole:
+    enabled: true
+    name: pod-relabel-role
+    rules:
+      - apiGroups: [""]
+        resources: ["pods", "replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+
+  clusterRoleBinding:
+    enabled: true
+    name: pod-relabel-role-binding
+    roleName: pod-relabel-role
+    serviceAccountName: pod-relabel-serviceaccount
+    namespace: dev

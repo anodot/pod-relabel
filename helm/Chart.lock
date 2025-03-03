@@ -1,0 +1,6 @@
+dependencies:
+- name: base-chart
+  repository: oci://932213950603.dkr.ecr.us-east-1.amazonaws.com
+  version: 1.1.35
+digest: sha256:3d17ce12d2a78807823e6b5099208a9173a78171c7adc56055f002b6cc76f9cf
+generated: "2025-03-01T17:31:39.799199+02:00"
