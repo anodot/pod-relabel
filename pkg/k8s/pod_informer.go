@@ -394,13 +394,6 @@ func (c *config) startPeriodicJob(ctx context.Context) {
 				continue
 			}
 
-			// for _, p := range list.Items {
-			//      // err := c.doHandle(c.apiClient, &p)
-			//      err := c.doHandle(ctx, c.apiClient, obj.(*corev1.Pod))
-			//      if err != nil {
-			//              klog.Error(err)
-			//      }
-			// }
 			klog.V(2).Infof("found %d pods that do not have %q label in namespace '%s'",
 				len(list.Items), AnodotPodNameLabel, c.watchNamespace)
 
