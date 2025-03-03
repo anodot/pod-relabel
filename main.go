@@ -7,6 +7,7 @@ import (
 	"os"
 	"pod-labes-setter/pkg/k8s"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -41,6 +42,11 @@ func main() {
 	podWatcher.Start()
 
 	http.Handle("/pods", podWatcher)
+
+	http.Handle("/metrics", promhttp.Handler())
+
+	klog.Info("Starting server on :8080")
+	klog.Info("Metrics available at /metrics")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 
 	/*
