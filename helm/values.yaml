@@ -2,16 +2,11 @@ base-chart:
   nameOverride: pod-relabel
   image:
     repository: 932213950603.dkr.ecr.us-east-1.amazonaws.com/pod-relabel
-    tag: 2024-06-07-12-56-6fc06ce
-
+    tag: 2025-03-03-12-34-cbd2255
   replicaCount: 1
-
   javaConfig:
     enabled: false
-
   extraEnv:
-
-
   resources:
     limits:
       cpu: 500m
@@ -19,7 +14,6 @@ base-chart:
     requests:
       cpu: 50m
       memory: 300M
-
   service:
     managementPort: 8000
     managementPortName: http-management
@@ -31,7 +25,6 @@ base-chart:
     # annotations:
     #   key: value
     type: ClusterIP
-
   ingress:
     enabled: false
     className: internal
@@ -40,21 +33,3 @@ base-chart:
     paths: /
     # hosts:
     #   - app-name.example.io
-
-  clusterRole:
-    enabled: true
-    name: pod-relabel-role
-    rules:
-      - apiGroups: [""]
-        resources: ["pods", "replicasets", "deployments", "daemonsets"]
-        verbs: ["get", "list", "patch", "watch"]
-      - apiGroups: ["apps"]
-        resources: ["replicasets", "deployments", "daemonsets"]
-        verbs: ["get", "list", "patch", "watch"]
-
-  clusterRoleBinding:
-    enabled: true
-    name: pod-relabel-role-binding
-    roleName: pod-relabel-role
-    serviceAccountName: pod-relabel-serviceaccount
-    namespace: dev
