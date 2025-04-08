@@ -2,7 +2,7 @@ base-chart:
   nameOverride: pod-relabel
   image:
     repository: 932213950603.dkr.ecr.us-east-1.amazonaws.com/pod-relabel
-    tag: 2025-03-03-12-34-cbd2255
+    tag: 2025-04-08-10-54-b2c9cd2
   replicaCount: 1
   javaConfig:
     enabled: false

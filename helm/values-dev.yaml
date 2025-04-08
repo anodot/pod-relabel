@@ -4,8 +4,15 @@ base-chart:
     INCLUDE_NAMESPACE: "dev" # single namespace 
     # EXCLUDE_NAMESPACE: "kube-system"
     # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
-    LOG_LEVEL: 2
+    LOG_LEVEL: 4
 
+  ingress:
+    enabled: true
+    className: internal
+    paths: /
+    hosts:
+      - pod-relabel.dev-int.mypileus.io
+      
   servicemonitor:
     enabled: true
     prometheus:

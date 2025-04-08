@@ -75,21 +75,23 @@ chart-push: login chart-build ## Push helm chart to ECR
 package: build login docker-build docker-push chart-build chart-push ## Build and push both docker image and chart
 
 ##Deployment:
-diff: login ## Show diff between local and deployed chart
+diff: login ## Show diff between local and deployed chart, for prod: make diff ENVIRONMENT=prod
 ifndef VERSION_CHART
 	$(error "VERSION_CHART is not set, example: make diff VERSION_CHART=2023-12-26-17-42")
 endif
 	@echo "Comparing version $(VERSION_CHART) with current deployment..."
+	rm -rf $(BINARY)
 	# Pull chart version
 	helm pull oci://$(AWS_ECR)/$(BINARY) --version=$(VERSION_CHART) --untar || true
 	# Show diff
 	helm diff upgrade $(BINARY) ./$(BINARY) --allow-unreleased --values=./$(BINARY)/values-$(ENVIRONMENT).yaml --set base-chart.image.tag=$(VERSION) -n $(ENVIRONMENT)
 
-deploy: login ## Deploy specific version to k8s
+deploy: login ## Deploy specific version to k8s, for prod: make deploy ENVIRONMENT=prod
 ifndef VERSION_CHART
 	$(error "VERSION_CHART is not set, example: make deploy VERSION_CHART=2023-12-26-17-42")
 endif
 	@echo "Deploying version $(VERSION_CHART) to environment: $(ENVIRONMENT)"
+	rm -rf $(BINARY)
 	# Pull specified chart version
 	helm pull oci://$(AWS_ECR)/$(BINARY) --version=$(VERSION_CHART) --untar || true
 	# Deploy
