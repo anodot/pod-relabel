@@ -6,6 +6,13 @@ base-chart:
     # INCLUDE_LABELS: "app.kubernetes.io/name=fluent-bit"
     LOG_LEVEL: 4
 
+  ingress:
+    enabled: true
+    className: internal
+    paths: /
+    hosts:
+      - pod-relabel.dev-int.mypileus.io
+      
   servicemonitor:
     enabled: true
     prometheus:
@@ -19,3 +26,21 @@ base-chart:
     port: http
     path: metrics
     interval: 45s
+
+  clusterRole:
+    enabled: true
+    name: pod-relabel-role
+    rules:
+      - apiGroups: [""]
+        resources: ["pods", "replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["replicasets", "deployments", "daemonsets"]
+        verbs: ["get", "list", "patch", "watch"]
+
+  clusterRoleBinding:
+    enabled: true
+    name: pod-relabel-role-binding
+    roleName: pod-relabel-role
+    serviceAccountName: pod-relabel-serviceaccount
+    namespace: dev
